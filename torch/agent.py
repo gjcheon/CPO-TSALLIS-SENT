@@ -134,20 +134,20 @@ class Agent:
         cost_mean = None
         cost_var_mean = None
 
-        # latest trajectory
-        temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
-            temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean = self._getTrainBatches(is_latest=True)
-        states_list += temp_states_list
-        actions_list += temp_actions_list
-        reward_targets_list += temp_reward_targets_list
-        cost_targets_list += temp_cost_targets_list
-        cost_var_targets_list += temp_cost_var_targets_list
-        reward_gaes_list += temp_reward_gaes_list
-        cost_gaes_list += temp_cost_gaes_list
-        cost_var_gaes_list += temp_cost_var_gaes_list
-        mu_means_list += temp_mu_means_list
-        mu_stds_list += temp_mu_stds_list
+        # # latest trajectory
+        # temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
+        #     temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
+        #     temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean = self._getTrainBatches(is_latest=True)
+        # states_list += temp_states_list
+        # actions_list += temp_actions_list
+        # reward_targets_list += temp_reward_targets_list
+        # cost_targets_list += temp_cost_targets_list
+        # cost_var_targets_list += temp_cost_var_targets_list
+        # reward_gaes_list += temp_reward_gaes_list
+        # cost_gaes_list += temp_cost_gaes_list
+        # cost_var_gaes_list += temp_cost_var_gaes_list
+        # mu_means_list += temp_mu_means_list
+        # mu_stds_list += temp_mu_stds_list
 
         # random trajectory
         temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
