@@ -1,6 +1,7 @@
 from typing import Optional, List
 
 from utils.color import cprint
+from utils.normalize import RunningMeanStd
 from models import Policy
 from models import Value2
 from models import Value
@@ -78,6 +79,11 @@ class Agent:
         # for replay buffer
         self.replay_buffer_per_env = int(args.len_replay_buffer/args.n_envs)
         self.replay_buffer = [deque(maxlen=self.replay_buffer_per_env) for _ in range(args.n_envs)]
+        
+        # for state entropy bonus
+        self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/s_ent', 1)
+        self.k = [2, 5, 8]
+        self.beta_intr = 0.01
 
         # for trust region
         self.damping_coeff = args.damping_coeff
@@ -134,20 +140,20 @@ class Agent:
         cost_mean = None
         cost_var_mean = None
 
-        # # latest trajectory
-        # temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
-        #     temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-        #     temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean = self._getTrainBatches(is_latest=True)
-        # states_list += temp_states_list
-        # actions_list += temp_actions_list
-        # reward_targets_list += temp_reward_targets_list
-        # cost_targets_list += temp_cost_targets_list
-        # cost_var_targets_list += temp_cost_var_targets_list
-        # reward_gaes_list += temp_reward_gaes_list
-        # cost_gaes_list += temp_cost_gaes_list
-        # cost_var_gaes_list += temp_cost_var_gaes_list
-        # mu_means_list += temp_mu_means_list
-        # mu_stds_list += temp_mu_stds_list
+        # latest trajectory
+        temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
+            temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
+            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean = self._getTrainBatches(is_latest=True)
+        states_list += temp_states_list
+        actions_list += temp_actions_list
+        reward_targets_list += temp_reward_targets_list
+        cost_targets_list += temp_cost_targets_list
+        cost_var_targets_list += temp_cost_var_targets_list
+        reward_gaes_list += temp_reward_gaes_list
+        cost_gaes_list += temp_cost_gaes_list
+        cost_var_gaes_list += temp_cost_var_gaes_list
+        mu_means_list += temp_mu_means_list
+        mu_stds_list += temp_mu_stds_list
 
         # random trajectory
         temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
@@ -352,6 +358,36 @@ class Agent:
         targets = np.clip(targets, 0.0, np.inf)
         return gaes, targets
 
+    def _getFullStates(self):
+        with torch.no_grad():
+            full_states_list = []
+            for env_idx in range(self.n_envs):
+                env_trajs = list(self.replay_buffer[env_idx])
+                states = np.array([traj[0] for traj in env_trajs])
+                states_tensor = torch.tensor(states, device=self.device, dtype=torch.float32)
+                full_states_list.append(states_tensor)
+            
+            full_states = torch.cat(full_states_list, dim=0)
+        return full_states
+
+    def _computeKnnDist(self, src_states, tgt_states):
+        with torch.no_grad():
+            dists = []
+            for idx in range(len(tgt_states) // 10000 + 1):
+                start = idx * 10000
+                end = (idx + 1) * 10000
+                dist = torch.norm(
+                    src_states[:, None, :] - tgt_states[None, start:end, :], dim=-1, p=2
+                )
+                dists.append(dist)
+            dists = torch.cat(dists, dim=-1)
+
+            knn_dists = 0.0
+            for k in self.k:
+                knn_dists += torch.kthvalue(dists, k, dim=1).values
+            # knn_dists = torch.kthvalue(dists, self.k[0], dim=1).values
+        return knn_dists
+
     def _getTrainBatches(self, is_latest=False):
         states_list = []
         actions_list = []
@@ -366,6 +402,8 @@ class Agent:
         mu_means_list = []
         mu_stds_list = []
 
+        full_states_tensor = self._getFullStates()
+        
         with torch.no_grad():
             for env_idx in range(self.n_envs):
                 n_latest_steps = min(len(self.replay_buffer[env_idx]), self.n_past_steps_per_env)
@@ -407,13 +445,20 @@ class Agent:
                 rhos_tensor = torch.clamp(torch.exp(old_log_probs_tensor - mu_log_probs_tensor), 0.0, 1.0)
                 rhos = rhos_tensor.detach().cpu().numpy()
 
+                # add state entropy bonus term to reward
+                knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
+                knn_dists = knn_dists_tensor.detach().cpu().numpy()
+                self.knn_dist_rms.update(knn_dists)
+                norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + 1e-8)
+                s_ent = np.log(1.0 + norm_knn_dists)
+
                 # get GAEs and Tagets
                 # for reward
                 reward_values_tensor = self.reward_value(states_tensor)
                 next_reward_values_tensor = self.reward_value(next_states_tensor)
                 reward_values = reward_values_tensor.detach().cpu().numpy()
                 next_reward_values = next_reward_values_tensor.detach().cpu().numpy()
-                reward_gaes, reward_targets = self._getGaesTargets(rewards, reward_values, dones, fails, next_reward_values, rhos)
+                reward_gaes, reward_targets = self._getGaesTargets(rewards + self.beta_intr * s_ent, reward_values, dones, fails, next_reward_values, rhos)
                 # for cost
                 cost_values_tensor = self.cost_value(states_tensor)
                 next_cost_values_tensor = self.cost_value(next_states_tensor)

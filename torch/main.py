@@ -74,7 +74,7 @@ def getParser():
     parser.add_argument('--line_decay', type=float, default=0.8, help='line decay.')
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
-    parser.add_argument('--cost_alpha', type=float, default=0.125, help='cost alpha of CVaR.')
+    parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
     parser.add_argument('--cost_d', type=float, default=0.025, help='cost limit value.')
     return parser
 
@@ -89,8 +89,9 @@ def train(args):
 
     # define Environment
     if 'doggo' in args.env_name.lower() or 'walker' in args.env_name.lower() or \
-        'cheetah' in args.env_name.lower():
+        'cheetah' in args.env_name.lower() or 'pointgoal' in args.env_name.lower():
         # enable normalization
+        print("normalization enabled!!!!")
         env_id = lambda:Env(args.env_name, args.seed, args.max_episode_steps)
         vec_env = make_vec_env(
             env_id=env_id, n_envs=args.n_envs, seed=args.seed,
