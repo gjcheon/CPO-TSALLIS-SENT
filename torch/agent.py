@@ -449,8 +449,10 @@ class Agent:
                 knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
                 knn_dists = knn_dists_tensor.detach().cpu().numpy()
                 self.knn_dist_rms.update(knn_dists)
-                norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + 1e-8)
-                s_ent = np.log(1.0 + norm_knn_dists)
+                norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + 1e-8) + 1e-8
+                #s_ent = np.log(1.0 + norm_knn_dists)
+                #assert np.all(norm_knn_dists > 0)
+                s_ent = -np.power(norm_knn_dists, -30) # q=1.2, m=60 # q=1.5, m=60
 
                 # get GAEs and Tagets
                 # for reward
@@ -458,7 +460,7 @@ class Agent:
                 next_reward_values_tensor = self.reward_value(next_states_tensor)
                 reward_values = reward_values_tensor.detach().cpu().numpy()
                 next_reward_values = next_reward_values_tensor.detach().cpu().numpy()
-                reward_gaes, reward_targets = self._getGaesTargets(rewards + self.beta_intr * s_ent, reward_values, dones, fails, next_reward_values, rhos)
+                reward_gaes, reward_targets = self._getGaesTargets(s_ent, reward_values, dones, fails, next_reward_values, rhos)
                 # for cost
                 cost_values_tensor = self.cost_value(states_tensor)
                 next_cost_values_tensor = self.cost_value(next_states_tensor)
