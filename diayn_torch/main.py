@@ -13,6 +13,8 @@ if not PATH in sys.path:
     sys.path.append(PATH)
 # =========================== #
 
+from mujoco_py import GlfwContext
+import cv2
 from utils.vectorize import DobroSubprocVecEnv2
 from utils.vectorize import DobroSubprocVecEnv
 from utils.normalize import RunningMeanStd
@@ -47,7 +49,7 @@ def getParser():
     parser.add_argument('--name', type=str, default='RL', help='save name.')
     parser.add_argument('--save_freq', type=int, default=int(1e6), help='# of time steps for save.')
     parser.add_argument('--slack_freq', type=int, default=int(2.5e6), help='# of time steps for slack message.')
-    parser.add_argument('--total_steps', type=int, default=int(1e7), help='total training steps.')
+    parser.add_argument('--total_steps', type=int, default=int(2e7), help='total training steps.')
     parser.add_argument('--seed', type=int, default=1, help='seed number.')
     parser.add_argument('--gpu_idx', type=int, default=0, help='GPU index.')
     # for env
@@ -68,6 +70,7 @@ def getParser():
     parser.add_argument('--discount_factor', type=float, default=0.99, help='discount factor.')
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
+    parser.add_argument('--n_skills', type=int, default=20, help='# of skills.')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -75,8 +78,19 @@ def getParser():
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
     parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
-    parser.add_argument('--cost_d', type=float, default=0.025, help='cost limit value.')
+    parser.add_argument('--cost_d', type=float, default=25.0, help='cost limit value.')
     return parser
+
+def concat_sz(state, z, n_z):
+    z_one_hot = np.zeros(n_z)
+    z_one_hot[z] = 1
+    return np.concatenate([state, z_one_hot])
+
+def concat_multiple_sz(states, zs, n_z):
+    result = []
+    for i in range(zs.shape[0]):
+        result.append(concat_sz(states[i], zs[i], n_z))
+    return np.stack(result)
 
 def train(args):
     # for random seed
@@ -113,9 +127,12 @@ def train(args):
     args.action_bound_min = vec_env.action_space.low
     args.action_bound_max = vec_env.action_space.high
 
+    # latent prior
+    p_z = np.full(args.n_skills, 1 / args.n_skills)
+
     # wandb
     if args.wandb:
-        project_name = '[Safety Gym] OffTRC'
+        project_name = '[Safety Gym] Safe Skill Discovery'
         wandb.init(
             project=project_name, 
             config=args,
@@ -133,12 +150,14 @@ def train(args):
     reward_value_loss_logger = Logger(args.save_dir, 'reward_value_loss')
     cost_value_loss_logger = Logger(args.save_dir, 'cost_value_loss')
     cost_var_value_loss_logger = Logger(args.save_dir, 'cost_var_value_loss')
+    discriminator_loss_logger = Logger(args.save_dir, 'discriminator_loss')
     entropy_logger = Logger(args.save_dir, 'entropy')
     kl_logger = Logger(args.save_dir, 'kl')
     score_logger = Logger(args.save_dir, 'score')
     eplen_logger = Logger(args.save_dir, 'eplen')
     cost_logger = Logger(args.save_dir, 'cost')
     cv_logger = Logger(args.save_dir, 'cv')
+    skill_logger = Logger(args.save_dir, 'skill')
 
     # define agent
     agent = Agent(args)
@@ -155,6 +174,12 @@ def train(args):
     while total_step < args.total_steps:
         # ======= collect trajectories ======= #
         step = 0
+        log_data = {}
+        
+        zs = np.random.choice(args.n_skills, args.n_envs, replace=False, p=p_z)
+        if total_step == 0:
+            observations = concat_multiple_sz(observations, zs, args.n_skills)
+        
         while step < args.n_steps:
             env_cnts += 1
             step += args.n_envs
@@ -169,6 +194,7 @@ def train(args):
                 stds = std_tensor.detach().cpu().numpy()
             next_observations, rewards, dones, infos = vec_env.step(clipped_actions)
 
+            next_observations = concat_multiple_sz(next_observations, zs, args.n_skills)
             for env_idx in range(args.n_envs):
                 reward_history[env_idx].append(rewards[env_idx])
                 cost_history[env_idx].append(infos[env_idx]['cost'])
@@ -180,10 +206,12 @@ def train(args):
 
                 fail = env_cnts[env_idx] < args.max_episode_steps if dones[env_idx] else False
                 done = True if env_cnts[env_idx] >= args.max_episode_steps else dones[env_idx]
-                next_observation = infos[env_idx]['terminal_observation'] if dones[env_idx] else next_observations[env_idx]
+                
+                next_observation = concat_sz(infos[env_idx]['terminal_observation'], zs[env_idx], args.n_skills) if dones[env_idx] else next_observations[env_idx]
+            
                 agent.addTransition(
                     env_idx, observations[env_idx], actions[env_idx], means[env_idx], stds[env_idx],
-                    rewards[env_idx], infos[env_idx]['cost'], float(done), float(fail), next_observation
+                    zs[env_idx], infos[env_idx]['cost'], float(done), float(fail), next_observation
                 )
 
                 if dones[env_idx]:
@@ -192,27 +220,35 @@ def train(args):
                     score_logger.write([ep_len, np.sum(reward_history[env_idx])])
                     cv_logger.write([ep_len, np.sum(cv_history[env_idx])])
                     cost_logger.write([ep_len, np.sum(cost_history[env_idx])])
+                    skill_logger.write([ep_len, zs[env_idx]])
+                    log_data.update({
+                        f'skill{zs[env_idx]}/step': total_step,
+                        f'skill{zs[env_idx]}/score': np.sum(reward_history[env_idx]),
+                        f'skill{zs[env_idx]}/cv': np.sum(cv_history[env_idx]),
+                        f'skill{zs[env_idx]}/cost': np.sum(cost_history[env_idx]),
+                    })
 
                     cost_history[env_idx] = []
                     reward_history[env_idx] = []
                     cv_history[env_idx] = []
                     env_cnts[env_idx] = 0
-
+            
             observations = next_observations
         # ==================================== #
 
         objective, cost_surrogate, reward_value_loss, cost_value_loss, \
-            cost_var_value_loss, entropy, kl, optim_case = agent.train()
+            cost_var_value_loss, discriminator_loss, entropy, kl, optim_case, knn_dist_mean = agent.train()
         reward_value_loss_logger.write([step, reward_value_loss])
         cost_value_loss_logger.write([step, cost_value_loss])
         cost_var_value_loss_logger.write([step, cost_var_value_loss])
+        discriminator_loss_logger.write([step, discriminator_loss])
         objective_logger.write([step, objective])
         cost_surrogate_logger.write([step, cost_surrogate])
         entropy_logger.write([step, entropy])
         kl_logger.write([step, kl])
 
         print_len = max(int(args.n_steps/args.max_episode_steps), args.n_envs)
-        log_data = {
+        log_data.update({
             "rollout/step": total_step, 
             "rollout/score": score_logger.get_avg(print_len), 
             "rollout/cost": cost_logger.get_avg(print_len),
@@ -226,7 +262,9 @@ def train(args):
             "train/reward_value_loss":reward_value_loss_logger.get_avg(), 
             "train/cost_value_loss":cost_value_loss_logger.get_avg(), 
             "train/cost_var_value_loss":cost_var_value_loss_logger.get_avg(), 
-        }
+            "train/discriminator_loss":discriminator_loss_logger.get_avg(),
+            "train/knn_dist_mean":knn_dist_mean,
+        })
         if args.wandb:
             wandb.log(log_data)
         print(log_data)
@@ -241,6 +279,7 @@ def train(args):
             reward_value_loss_logger.save()
             cost_value_loss_logger.save()
             cost_var_value_loss_logger.save()
+            discriminator_loss_logger.save()
             objective_logger.save()
             cost_surrogate_logger.save()
             entropy_logger.save()
@@ -249,6 +288,7 @@ def train(args):
             cost_logger.save()
             eplen_logger.save()
             cv_logger.save()
+            skill_logger.save()
 
 
 def test(args):
@@ -256,7 +296,7 @@ def test(args):
     env = Env(args.env_name, args.seed, args.max_episode_steps)
     obs_rms = RunningMeanStd(args.save_dir, env.observation_space.shape[0])
     episodes = int(10)
-
+    
     # set args value for env
     args.obs_dim = env.observation_space.shape[0]
     args.action_dim = env.action_space.shape[0]
@@ -266,29 +306,53 @@ def test(args):
     # define agent
     agent = Agent(args)
 
-    for episode in range(episodes):
-        obs = env.reset()
-        obs = obs_rms.normalize(obs)
-        done = False
-        score = 0.0
-        cost = 0.0
-        cv = 0
-        step = 0
-        while True:
-            step += 1
-            with torch.no_grad():
-                obs_tensor = torch.tensor(obs, device=args.device, dtype=torch.float32)
-                action_tensor, _, _, _ = agent.getAction(obs_tensor, False)
-                action = action_tensor.detach().cpu().numpy()
-            obs, reward, done, info = env.step(action)
+    # record video
+    GlfwContext(offscreen=True)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    if not os.path.exists("Vid/"):
+        os.mkdir("Vid/")
+    
+    for z in range(args.n_skills):
+        video_writer = cv2.VideoWriter(f"Vid/skill{z}" + ".avi", fourcc, 50.0, (250, 250))
+        
+        for episode in range(episodes):
+            obs = env.reset()
             obs = obs_rms.normalize(obs)
-            env.render()
-            score += reward
-            cv += info['num_cv']
-            cost += info['cost']
-            if done: break
-            time.sleep(0.01)
+            
+            print(f"skill {z}")
+            obs = concat_sz(obs, z, args.n_skills)
+            done = False
+            score = 0.0
+            cost = 0.0
+            cv = 0
+            while True:
+                with torch.no_grad():
+                    obs_tensor = torch.tensor(obs, device=args.device, dtype=torch.float32)
+                    action_tensor, _, _, _ = agent.getAction(obs_tensor, False)
+                    action = action_tensor.detach().cpu().numpy()
+                obs, reward, done, info = env.step(action)
+                obs = obs_rms.normalize(obs)
+                obs = concat_sz(obs, z, args.n_skills)
+                
+                if episode == 0:
+                    I = env.render(mode='rgb_array')
+                    I = cv2.cvtColor(I, cv2.COLOR_RGB2BGR)
+                    I = cv2.resize(I, (250, 250))
+                    video_writer.write(I)
+                
+                score += reward
+                cv += info['num_cv']
+                cost += info['cost']
+                if done: break
+                time.sleep(0.01)
+            
+        score /= episodes
+        cv /= episodes
+        cost /= episodes
         print(f"score : {score:.3f}, cv : {cv}, cost: {cost}")
+        video_writer.release()
+    env.close()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     parser = getParser()

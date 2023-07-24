@@ -2,12 +2,11 @@ from typing import Optional, List
 
 from utils.color import cprint
 from utils.normalize import RunningMeanStd
-from models import Policy
-from models import Value2
-from models import Value
+from models import Policy, Value, Value2, Discriminator
 import ctypes
 
 from torch.distributions import Normal
+from torch.nn.functional import log_softmax
 from collections import deque
 from scipy.stats import norm
 from copy import deepcopy
@@ -80,13 +79,17 @@ class Agent:
         self.replay_buffer_per_env = int(args.len_replay_buffer/args.n_envs)
         self.replay_buffer = [deque(maxlen=self.replay_buffer_per_env) for _ in range(args.n_envs)]
         
+        # for DIAYN reward
+        self.n_skills = args.n_skills
+        self.p_z = np.tile(np.full(self.n_skills, 1 / self.n_skills)
+                           , self.n_update_steps_per_env).reshape(self.n_update_steps_per_env, self.n_skills)
+        self.p_z = torch.from_numpy(self.p_z).to(args.device)
+        self.cross_ent_loss = torch.nn.CrossEntropyLoss()
+        
         # for state entropy bonus
-        if not os.path.exists(f'{args.save_dir}/intr_reward_log', 1):
-            os.mkdir(f'{args.save_dir}/intr_reward_log')        
-        self.s_ent_rms = RunningMeanStd(f'{args.save_dir}/intr_reward_log', 1)
-        if not os.path.exists(f'{args.save_dir}/knn_dist_log', 1):
-            os.mkdir(f'{args.save_dir}/knn_dist_log')
-        self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist_log', 1)
+        if not os.path.exists(f'{args.save_dir}/knn_dist'):
+            os.mkdir(f'{args.save_dir}/knn_dist')
+        self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist', 1)
         self.k = [2, 3, 4]
         self.beta_intr = 0.01
 
@@ -107,11 +110,13 @@ class Agent:
         self.cost_value = Value(args).to(args.device)
         self.cost_std_value = Value2(args).to(args.device)
         self.cost_var_value = lambda x: torch.square(self.cost_std_value(x))
+        self.discriminator = Discriminator(args).to(args.device)
 
         # optimizers
         self.reward_value_optimizer = torch.optim.Adam(self.reward_value.parameters(), lr=self.lr)
         self.cost_value_optimizer = torch.optim.Adam(self.cost_value.parameters(), lr=self.lr)
         self.cost_std_value_optimizer = torch.optim.Adam(self.cost_value.parameters(), lr=self.lr)
+        self.discriminator_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr)
 
         # load
         self._load()
@@ -128,11 +133,12 @@ class Agent:
         clipped_action = clip(action, self.action_bound_max, self.action_bound_min)
         return action, clipped_action, mean, std
 
-    def addTransition(self, env_idx, state, action, mu_mean, mu_std, reward, cost, done, fail, next_state):
-        self.replay_buffer[env_idx].append([state, action, mu_mean, mu_std, reward, cost, done, fail, next_state])
+    def addTransition(self, env_idx, state, action, mu_mean, mu_std, z, cost, done, fail, next_state):
+        self.replay_buffer[env_idx].append([state, action, mu_mean, mu_std, z, cost, done, fail, next_state])
 
     def train(self):
         states_list = []
+        zs_list = []
         actions_list = []
         reward_targets_list = []
         cost_targets_list = []
@@ -146,10 +152,11 @@ class Agent:
         cost_var_mean = None
 
         # latest trajectory
-        temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
+        temp_states_list, temp_zs_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
             temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean = self._getTrainBatches(is_latest=True)
+            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean, _ = self._getTrainBatches(is_latest=True)
         states_list += temp_states_list
+        zs_list += temp_zs_list
         actions_list += temp_actions_list
         reward_targets_list += temp_reward_targets_list
         cost_targets_list += temp_cost_targets_list
@@ -161,10 +168,11 @@ class Agent:
         mu_stds_list += temp_mu_stds_list
 
         # random trajectory
-        temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
+        temp_states_list, temp_zs_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
             temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, _, _ = self._getTrainBatches(is_latest=False)
+            temp_mu_means_list, temp_mu_stds_list, _, _, knn_dist_mean = self._getTrainBatches(is_latest=False)
         states_list += temp_states_list
+        zs_list += temp_zs_list
         actions_list += temp_actions_list
         reward_targets_list += temp_reward_targets_list
         cost_targets_list += temp_cost_targets_list
@@ -178,6 +186,7 @@ class Agent:
         # convert to tensor
         with torch.no_grad():
             states_tensor = torch.tensor(np.concatenate(states_list, axis=0), device=self.device, dtype=torch.float32)
+            zs_tensor = torch.tensor(np.concatenate(zs_list, axis=0), device=self.device, dtype=torch.int64).view(-1, 1)
             actions_tensor = self._normalizeAction(torch.tensor(np.concatenate(actions_list, axis=0), device=self.device, dtype=torch.float32))
             reward_targets_tensor = torch.tensor(np.concatenate(reward_targets_list, axis=0), device=self.device, dtype=torch.float32)
             cost_targets_tensor = torch.tensor(np.concatenate(cost_targets_list, axis=0), device=self.device, dtype=torch.float32)
@@ -208,6 +217,12 @@ class Agent:
             torch.nn.utils.clip_grad_norm_(self.cost_std_value.parameters(), self.max_grad_norm)
             self.cost_std_value_optimizer.step()
         # ================================================== #
+
+            logits = self.discriminator(torch.split(states_tensor, [self.obs_dim, self.n_skills], dim=-1)[0])
+            discriminator_loss = self.cross_ent_loss(logits, zs_tensor.squeeze(-1))
+            self.discriminator_optimizer.zero_grad()
+            discriminator_loss.backward()
+            self.discriminator_optimizer.step()
 
         # ================= Policy Update ================= #
         # backup old policy
@@ -297,11 +312,10 @@ class Agent:
                 beta *= self.line_decay
         # ================================================= #
 
-        # self.knn_dist_rms.save()
-        self.s_ent_rms.save()
+        self.knn_dist_rms.save()
         
         return objective.item(), cost_surrogate.item(), reward_value_loss.item(), cost_value_loss.item(), \
-            cost_var_value_loss.item(), entropy.item(), kl.item(), optim_case
+            cost_var_value_loss.item(), -discriminator_loss.item() ,entropy.item(), kl.item(), optim_case, knn_dist_mean
 
     def save(self):
         torch.save({
@@ -398,6 +412,7 @@ class Agent:
 
     def _getTrainBatches(self, is_latest=False):
         states_list = []
+        zs_list = []
         actions_list = []
         reward_targets_list = []
         cost_targets_list = []
@@ -410,6 +425,7 @@ class Agent:
         mu_means_list = []
         mu_stds_list = []
 
+        knn_dist_mean = 0
         full_states_tensor = self._getFullStates()
         
         with torch.no_grad():
@@ -431,7 +447,7 @@ class Agent:
                 actions = np.array([traj[1] for traj in env_trajs])
                 mu_means = np.array([traj[2] for traj in env_trajs])
                 mu_stds = np.array([traj[3] for traj in env_trajs])
-                rewards = np.array([traj[4] for traj in env_trajs])
+                zs = np.array([traj[4] for traj in env_trajs])
                 costs = np.array([traj[5] for traj in env_trajs])
                 dones = np.array([traj[6] for traj in env_trajs])
                 fails = np.array([traj[7] for traj in env_trajs])
@@ -439,6 +455,7 @@ class Agent:
 
                 # convert to tensor
                 states_tensor = torch.tensor(states, device=self.device, dtype=torch.float32)
+                zs_tensor = torch.tensor(zs, device=self.device, dtype=torch.int64).view(-1, 1)
                 actions_tensor = self._normalizeAction(torch.tensor(actions, device=self.device, dtype=torch.float32))
                 next_states_tensor = torch.tensor(next_states, device=self.device, dtype=torch.float32)
                 mu_means_tensor = torch.tensor(mu_means, device=self.device, dtype=torch.float32)
@@ -453,23 +470,24 @@ class Agent:
                 rhos_tensor = torch.clamp(torch.exp(old_log_probs_tensor - mu_log_probs_tensor), 0.0, 1.0)
                 rhos = rhos_tensor.detach().cpu().numpy()
 
-                # add state entropy bonus term to reward
+                # for DIAYN reward
+                logits = self.discriminator(torch.split(next_states_tensor, [self.obs_dim, self.n_skills], dim=-1)[0])
+                p_z = self.p_z.gather(-1, zs_tensor)
+                logq_z_ns = log_softmax(logits, dim=-1)
+                rewards_tensor = logq_z_ns.gather(-1, zs_tensor).detach() - torch.log(p_z + EPS)
+                rewards = rewards_tensor.detach().cpu().numpy()
                 
+                # add state entropy bonus term to reward
                 knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
                 knn_dists = knn_dists_tensor.detach().cpu().numpy()
-                # distance normalize version
-                # self.knn_dist_rms.update(knn_dists)
-                # norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + EPS) + EPS
-                # s_ent = np.log(1.0 + norm_knn_dists)
-                # assert np.all(norm_knn_dists > 0)
-                # s_ent = np.log(norm_knn_dists) # q=1.0
-                # s_ent = -np.power(norm_knn_dists, -12) # q=1.2, m=60 # q=1.5, m=60
+                knn_dist_mean = np.mean(knn_dists)
                 self.knn_dist_rms.update(knn_dists)
-                knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 2 * np.sqrt(self.knn_dist_rms.var + EPS))
-                
-                s_ent = np.log(np.clip(knn_dists, a_min=knn_dist_min))
-                self.s_ent_rms.update(s_ent)
-                norm_s_ent = self.s_ent_rms.normalize(s_ent)
+                #norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + 1e-8) + 1e-8
+                #s_ent = np.log(1.0 + norm_knn_dists)
+                #assert np.all(norm_knn_dists > 0)
+                #s_ent = np.log(norm_knn_dists) # q=1.0
+                #s_ent = -np.power(norm_knn_dists, -12) # q=1.2, m=60 # q=1.5, m=60
+                rewards = np.squeeze(rewards) #+ self.beta_intr * s_ent
 
                 # get GAEs and Tagets
                 # for reward
@@ -477,7 +495,7 @@ class Agent:
                 next_reward_values_tensor = self.reward_value(next_states_tensor)
                 reward_values = reward_values_tensor.detach().cpu().numpy()
                 next_reward_values = next_reward_values_tensor.detach().cpu().numpy()
-                reward_gaes, reward_targets = self._getGaesTargets(norm_s_ent, reward_values, dones, fails, next_reward_values, rhos)
+                reward_gaes, reward_targets = self._getGaesTargets(rewards, reward_values, dones, fails, next_reward_values, rhos)
                 # for cost
                 cost_values_tensor = self.cost_value(states_tensor)
                 next_cost_values_tensor = self.cost_value(next_states_tensor)
@@ -497,6 +515,7 @@ class Agent:
 
                 # save
                 states_list.append(states)
+                zs_list.append(zs)
                 actions_list.append(actions)
                 reward_gaes_list.append(reward_gaes)
                 cost_gaes_list.append(cost_gaes)
@@ -510,9 +529,9 @@ class Agent:
         # get cost mean & cost variance mean
         cost_mean = np.mean(cost_mean_list)
         cost_var_mean = np.mean(cost_var_mean_list)
-
-        return states_list, actions_list, reward_targets_list, cost_targets_list, cost_var_targets_list, \
-            reward_gaes_list, cost_gaes_list, cost_var_gaes_list, mu_means_list, mu_stds_list, cost_mean, cost_var_mean
+        
+        return states_list, zs_list, actions_list, reward_targets_list, cost_targets_list, cost_var_targets_list, \
+            reward_gaes_list, cost_gaes_list, cost_var_gaes_list, mu_means_list, mu_stds_list, cost_mean, cost_var_mean, knn_dist_mean
 
     def _applyParams(self, params):
         n = 0

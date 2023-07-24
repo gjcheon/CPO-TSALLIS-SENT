@@ -45,3 +45,4 @@ class RunningMeanStd(object):
     def save(self):
         with open(self.file_name, 'wb') as f:
             pickle.dump([self.mean, self.var, self.count], f)
+        
