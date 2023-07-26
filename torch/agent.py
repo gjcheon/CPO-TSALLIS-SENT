@@ -149,7 +149,7 @@ class Agent:
         # latest trajectory
         temp_states_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
             temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean, knn_dist_mean, knn_dist_min, s_ent_mean = self._getTrainBatches(is_latest=True)
+            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean, _, _, _ = self._getTrainBatches(is_latest=True)
         states_list += temp_states_list
         actions_list += temp_actions_list
         reward_targets_list += temp_reward_targets_list

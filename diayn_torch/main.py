@@ -70,8 +70,9 @@ def getParser():
     parser.add_argument('--discount_factor', type=float, default=0.99, help='discount factor.')
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
+    parser.add_argument('--tsallis_q', type=float, default=1.0, help='Tsallis entropy q value')
     parser.add_argument('--n_skills', type=int, default=20, help='# of skills.')
-    parser.add_argument('--ent_coeff', type=int, default=0.01, help='action entropy coefficient.')
+    parser.add_argument('--ent_coeff', type=int, default=0.005, help='action entropy coefficient.')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -238,7 +239,7 @@ def train(args):
         # ==================================== #
 
         objective, cost_surrogate, reward_value_loss, cost_value_loss, \
-            cost_var_value_loss, discriminator_loss, entropy, kl, optim_case, knn_dist_mean = agent.train()
+            cost_var_value_loss, discriminator_loss, entropy, kl, optim_case, knn_dist_mean, knn_dist_min = agent.train()
         reward_value_loss_logger.write([step, reward_value_loss])
         cost_value_loss_logger.write([step, cost_value_loss])
         cost_var_value_loss_logger.write([step, cost_var_value_loss])
@@ -260,11 +261,12 @@ def train(args):
             "metric/objective":objective_logger.get_avg(), 
             "metric/cost_surrogate":cost_surrogate_logger.get_avg(), 
             "metric/optim_case":optim_case, 
+            "metric/knn_dist_mean":knn_dist_mean,
+            "metric/knn_dist_min": knn_dist_min,
             "train/reward_value_loss":reward_value_loss_logger.get_avg(), 
             "train/cost_value_loss":cost_value_loss_logger.get_avg(), 
             "train/cost_var_value_loss":cost_var_value_loss_logger.get_avg(), 
             "train/discriminator_loss":discriminator_loss_logger.get_avg(),
-            "train/knn_dist_mean":knn_dist_mean,
         })
         if args.wandb:
             wandb.log(log_data)
@@ -331,7 +333,6 @@ def test(args):
                     obs_tensor = torch.tensor(obs, device=args.device, dtype=torch.float32)
                     action_tensor, _, _, _ = agent.getAction(obs_tensor, False)
                     action = action_tensor.detach().cpu().numpy()
-                    print(action)
                 obs, reward, done, info = env.step(action)
                 obs = obs_rms.normalize(obs)
                 obs = concat_sz(obs, z, args.n_skills)

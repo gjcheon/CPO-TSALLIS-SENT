@@ -74,6 +74,7 @@ class Agent:
         self.n_epochs = args.n_epochs
         self.max_grad_norm = args.max_grad_norm
         self.gae_coeff = args.gae_coeff
+        self.tsallis_q = args.tsallis_q
         self.ent_coeff = args.ent_coeff
 
         # for replay buffer
@@ -88,9 +89,12 @@ class Agent:
         self.cross_ent_loss = torch.nn.CrossEntropyLoss()
         
         # for state entropy bonus
-        if not os.path.exists(f'{args.save_dir}/knn_dist'):
-            os.mkdir(f'{args.save_dir}/knn_dist')
-        self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist', 1)
+        if not os.path.exists(f'{args.save_dir}/intr_reward_log'):
+            os.mkdir(f'{args.save_dir}/intr_reward_log')        
+        self.s_ent_rms = RunningMeanStd(f'{args.save_dir}/intr_reward_log', 1)
+        if not os.path.exists(f'{args.save_dir}/knn_dist_log'):
+            os.mkdir(f'{args.save_dir}/knn_dist_log')
+        self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist_log', 1)
         self.k = [2, 3, 4]
         self.beta_intr = 0.01
 
@@ -155,7 +159,7 @@ class Agent:
         # latest trajectory
         temp_states_list, temp_zs_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
             temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean, _ = self._getTrainBatches(is_latest=True)
+            temp_mu_means_list, temp_mu_stds_list, cost_mean, cost_var_mean, _, _ = self._getTrainBatches(is_latest=True)
         states_list += temp_states_list
         zs_list += temp_zs_list
         actions_list += temp_actions_list
@@ -171,7 +175,7 @@ class Agent:
         # random trajectory
         temp_states_list, temp_zs_list, temp_actions_list, temp_reward_targets_list, temp_cost_targets_list, temp_cost_var_targets_list, \
             temp_reward_gaes_list, temp_cost_gaes_list, temp_cost_var_gaes_list, \
-            temp_mu_means_list, temp_mu_stds_list, _, _, knn_dist_mean = self._getTrainBatches(is_latest=False)
+            temp_mu_means_list, temp_mu_stds_list, _, _, knn_dist_mean, knn_dist_min = self._getTrainBatches(is_latest=False)
         states_list += temp_states_list
         zs_list += temp_zs_list
         actions_list += temp_actions_list
@@ -317,7 +321,7 @@ class Agent:
         self.knn_dist_rms.save()
         
         return objective.item(), cost_surrogate.item(), reward_value_loss.item(), cost_value_loss.item(), \
-            cost_var_value_loss.item(), -discriminator_loss.item() ,entropy.item(), kl.item(), optim_case, knn_dist_mean
+            cost_var_value_loss.item(), -discriminator_loss.item() ,entropy.item(), kl.item(), optim_case, knn_dist_mean, knn_dist_min
 
     def save(self):
         torch.save({
@@ -426,8 +430,9 @@ class Agent:
         cost_var_mean_list = []
         mu_means_list = []
         mu_stds_list = []
-
-        knn_dist_mean = 0
+        knn_dist_mean_list = []
+        knn_dist_min_list = []
+        
         full_states_tensor = self._getFullStates()
         
         with torch.no_grad():
@@ -482,14 +487,19 @@ class Agent:
                 # add state entropy bonus term to reward
                 knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
                 knn_dists = knn_dists_tensor.detach().cpu().numpy()
-                knn_dist_mean = np.mean(knn_dists)
                 self.knn_dist_rms.update(knn_dists)
-                #norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + 1e-8) + 1e-8
-                #s_ent = np.log(1.0 + norm_knn_dists)
-                #assert np.all(norm_knn_dists > 0)
-                #s_ent = np.log(norm_knn_dists) # q=1.0
-                #s_ent = -np.power(norm_knn_dists, -12) # q=1.2, m=60 # q=1.5, m=60
-                rewards = np.squeeze(rewards) #+ self.beta_intr * s_ent
+                knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 3 * np.sqrt(self.knn_dist_rms.var + EPS))
+                
+                if self.tsallis_q <= 1.0 + EPS and self.tsallis_q >= 1.0 - EPS:
+                    s_ent = np.log(np.clip(knn_dists, knn_dist_min, None))
+                elif self.tsallis_q >= 1.0 + EPS:
+                    s_ent = -np.power(np.clip(knn_dists, knn_dist_min, None), -self.obs_dim*self.tsallis_q)
+                else:
+                    NotImplementedError
+                self.s_ent_rms.update(s_ent)
+                norm_s_ent = self.s_ent_rms.normalize(s_ent)
+                
+                rewards = np.squeeze(rewards) + self.beta_intr * norm_s_ent
 
                 # get GAEs and Tagets
                 # for reward
@@ -527,13 +537,17 @@ class Agent:
                 cost_var_targets_list.append(cost_var_targets)
                 mu_means_list.append(mu_means)
                 mu_stds_list.append(mu_stds)
+                knn_dist_mean_list.append(np.mean(knn_dists))
+                knn_dist_min_list.append(knn_dist_min)
 
         # get cost mean & cost variance mean
         cost_mean = np.mean(cost_mean_list)
         cost_var_mean = np.mean(cost_var_mean_list)
+        knn_dist_mean = np.mean(knn_dist_mean_list)
+        knn_dist_min = np.min(knn_dist_min_list) if len(knn_dist_min_list) != 0 else 0.0        
         
         return states_list, zs_list, actions_list, reward_targets_list, cost_targets_list, cost_var_targets_list, \
-            reward_gaes_list, cost_gaes_list, cost_var_gaes_list, mu_means_list, mu_stds_list, cost_mean, cost_var_mean, knn_dist_mean
+            reward_gaes_list, cost_gaes_list, cost_var_gaes_list, mu_means_list, mu_stds_list, cost_mean, cost_var_mean, knn_dist_mean, knn_dist_min
 
     def _applyParams(self, params):
         n = 0
