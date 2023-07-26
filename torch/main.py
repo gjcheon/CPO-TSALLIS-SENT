@@ -68,6 +68,7 @@ def getParser():
     parser.add_argument('--discount_factor', type=float, default=0.99, help='discount factor.')
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
+    parser.add_argument('--tsallis_q', type=float, default=1.0, help='Tsallis entropy q value')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -202,7 +203,7 @@ def train(args):
         # ==================================== #
 
         objective, cost_surrogate, reward_value_loss, cost_value_loss, \
-            cost_var_value_loss, entropy, kl, optim_case = agent.train()
+            cost_var_value_loss, entropy, kl, optim_case, knn_dist_mean, knn_dist_min, s_ent_mean = agent.train()
         reward_value_loss_logger.write([step, reward_value_loss])
         cost_value_loss_logger.write([step, cost_value_loss])
         cost_var_value_loss_logger.write([step, cost_var_value_loss])
@@ -223,6 +224,9 @@ def train(args):
             "metric/objective":objective_logger.get_avg(), 
             "metric/cost_surrogate":cost_surrogate_logger.get_avg(), 
             "metric/optim_case":optim_case, 
+            "metric/knn_dist_mean": knn_dist_mean,
+            "metric/knn_dist_min": knn_dist_min,
+            "metric/s_ent_mean": s_ent_mean, 
             "train/reward_value_loss":reward_value_loss_logger.get_avg(), 
             "train/cost_value_loss":cost_value_loss_logger.get_avg(), 
             "train/cost_var_value_loss":cost_var_value_loss_logger.get_avg(), 
