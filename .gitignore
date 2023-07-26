@@ -4,6 +4,7 @@
 *.gch
 *.pt
 *.png
+*.avi
 args.txt
 __pycache__
 .vscode

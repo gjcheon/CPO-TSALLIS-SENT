@@ -71,6 +71,7 @@ def getParser():
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
     parser.add_argument('--n_skills', type=int, default=20, help='# of skills.')
+    parser.add_argument('--ent_coeff', type=int, default=0.01, help='action entropy coefficient.')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -330,6 +331,7 @@ def test(args):
                     obs_tensor = torch.tensor(obs, device=args.device, dtype=torch.float32)
                     action_tensor, _, _, _ = agent.getAction(obs_tensor, False)
                     action = action_tensor.detach().cpu().numpy()
+                    print(action)
                 obs, reward, done, info = env.step(action)
                 obs = obs_rms.normalize(obs)
                 obs = concat_sz(obs, z, args.n_skills)

@@ -74,6 +74,7 @@ class Agent:
         self.n_epochs = args.n_epochs
         self.max_grad_norm = args.max_grad_norm
         self.gae_coeff = args.gae_coeff
+        self.ent_coeff = args.ent_coeff
 
         # for replay buffer
         self.replay_buffer_per_env = int(args.len_replay_buffer/args.n_envs)
@@ -218,6 +219,7 @@ class Agent:
             self.cost_std_value_optimizer.step()
         # ================================================== #
 
+        # for _ in range(self.n_epochs // 10):
             logits = self.discriminator(torch.split(states_tensor, [self.obs_dim, self.n_skills], dim=-1)[0])
             discriminator_loss = self.cross_ent_loss(logits, zs_tensor.squeeze(-1))
             self.discriminator_optimizer.zero_grad()
@@ -344,7 +346,7 @@ class Agent:
         prob_ratios = torch.exp(cur_log_probs - old_log_probs)
         reward_gaes_mean = torch.mean(reward_gaes*old_prob_ratios)
         reward_gaes_std = torch.std(reward_gaes*old_prob_ratios)
-        objective = torch.mean(prob_ratios*(reward_gaes*old_prob_ratios - reward_gaes_mean)/(reward_gaes_std + EPS))
+        objective = torch.mean(prob_ratios*(reward_gaes*old_prob_ratios - reward_gaes_mean)/(reward_gaes_std + EPS)) + self.ent_coeff * entropy
         return objective, entropy
 
     def _getCostSurrogate(self, cur_dists, old_dists, actions, cost_gaes, cost_var_gaes, old_prob_ratios, cost_mean, cost_var_mean):
