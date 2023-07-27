@@ -433,7 +433,7 @@ class Agent:
         knn_dist_mean_list = []
         knn_dist_min_list = []
         
-        full_states_tensor = self._getFullStates()
+        #full_states_tensor = self._getFullStates()
         
         with torch.no_grad():
             for env_idx in range(self.n_envs):
@@ -485,7 +485,7 @@ class Agent:
                 rewards = rewards_tensor.detach().cpu().numpy()
                 
                 # add state entropy bonus term to reward
-                knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
+                knn_dists_tensor = self._computeKnnDist(states_tensor, states_tensor.clone())
                 knn_dists = knn_dists_tensor.detach().cpu().numpy()
                 self.knn_dist_rms.update(knn_dists)
                 knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 3 * np.sqrt(self.knn_dist_rms.var + EPS))
