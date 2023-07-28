@@ -72,7 +72,8 @@ def getParser():
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
     parser.add_argument('--tsallis_q', type=float, default=1.0, help='Tsallis entropy q value')
     parser.add_argument('--n_skills', type=int, default=20, help='# of skills.')
-    parser.add_argument('--ent_coeff', type=int, default=0.007, help='action entropy coefficient.')
+    parser.add_argument('--ent_coeff', type=int, default=0.006, help='action entropy coefficient.')
+    parser.add_argument('--beta_intr', type=int, default=1.0, help='adjust magnitude of intrinsic reward.')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')

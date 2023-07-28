@@ -96,7 +96,7 @@ class Agent:
             os.mkdir(f'{args.save_dir}/knn_dist_log')
         self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist_log', 1)
         self.k = [2, 3, 4]
-        self.beta_intr = 0.01
+        self.beta_intr = args.beta_intr
 
         # for trust region
         self.damping_coeff = args.damping_coeff
@@ -600,7 +600,7 @@ class Agent:
             os.makedirs(self.checkpoint_dir)
         checkpoint_file = f"{self.checkpoint_dir}/model.pt"
         if os.path.isfile(checkpoint_file):
-            checkpoint = torch.load(checkpoint_file)
+            checkpoint = torch.load(checkpoint_file, map_location=self.device)
             self.reward_value.load_state_dict(checkpoint['reward_value'])
             self.cost_value.load_state_dict(checkpoint['cost_value'])
             self.cost_std_value.load_state_dict(checkpoint['cost_std_value'])
