@@ -469,12 +469,12 @@ class Agent:
                 # s_ent = np.log(norm_knn_dists) # q=1.0
                 # s_ent = -np.power(norm_knn_dists, -12) # q=1.2, m=60 # q=1.5, m=60
                 self.knn_dist_rms.update(knn_dists)
-                knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 2 * np.sqrt(self.knn_dist_rms.var + EPS))
+                knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 3 * np.sqrt(self.knn_dist_rms.var + EPS))
                 
                 if self.tsallis_q <= 1.0 + EPS and self.tsallis_q >= 1.0 - EPS:
                     s_ent = np.log(np.clip(knn_dists, knn_dist_min, None))
                 elif self.tsallis_q >= 1.0 + EPS:
-                    s_ent = -np.power(np.clip(knn_dists, knn_dist_min, None), -self.obs_dim*self.tsallis_q)
+                    s_ent = -np.power(np.clip(knn_dists, knn_dist_min, None), -(self.tsallis_q - 1))
                 else:
                     NotImplementedError
                 s_ent_mean = np.mean(s_ent)
@@ -583,7 +583,7 @@ class Agent:
             os.makedirs(self.checkpoint_dir)
         checkpoint_file = f"{self.checkpoint_dir}/model.pt"
         if os.path.isfile(checkpoint_file):
-            checkpoint = torch.load(checkpoint_file)
+            checkpoint = torch.load(checkpoint_file, map_location=self.device)
             self.reward_value.load_state_dict(checkpoint['reward_value'])
             self.cost_value.load_state_dict(checkpoint['cost_value'])
             self.cost_std_value.load_state_dict(checkpoint['cost_std_value'])
