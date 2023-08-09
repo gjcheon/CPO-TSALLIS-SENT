@@ -69,6 +69,7 @@ def getParser():
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
     parser.add_argument('--tsallis_q', type=float, default=1.0, help='Tsallis entropy q value')
+    parser.add_argument('--beta_intr', type=float, default=0.0, help='portion of intrinsic reward')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -76,7 +77,7 @@ def getParser():
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
     parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
-    parser.add_argument('--cost_d', type=float, default=0.025, help='cost limit value.')
+    parser.add_argument('--cost_d', type=float, default=0.05, help='cost limit value.')
     return parser
 
 def train(args):
@@ -257,7 +258,7 @@ def train(args):
 
 def test(args):
     # define Environment
-    env = Env(args.env_name, args.seed, args.max_episode_steps)
+    env = Env(args.env_name, 1, args.max_episode_steps)
     obs_rms = RunningMeanStd(args.save_dir, env.observation_space.shape[0])
     episodes = int(10)
 

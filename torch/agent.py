@@ -89,7 +89,7 @@ class Agent:
             os.mkdir(f'{args.save_dir}/knn_dist_log')
         self.knn_dist_rms = RunningMeanStd(f'{args.save_dir}/knn_dist_log', 1)
         self.k = [2, 3, 4]
-        self.beta_intr = 0.01
+        self.beta_intr = args.beta_intr
 
         # for trust region
         self.damping_coeff = args.damping_coeff
@@ -461,13 +461,6 @@ class Agent:
                 knn_dists_tensor = self._computeKnnDist(states_tensor, full_states_tensor)
                 knn_dists = knn_dists_tensor.detach().cpu().numpy()
                 knn_dist_mean = np.mean(knn_dists)
-                # distance normalize version
-                # self.knn_dist_rms.update(knn_dists)
-                # norm_knn_dists = knn_dists / np.sqrt(self.knn_dist_rms.var + EPS) + EPS
-                # s_ent = np.log(1.0 + norm_knn_dists)
-                # assert np.all(norm_knn_dists > 0)
-                # s_ent = np.log(norm_knn_dists) # q=1.0
-                # s_ent = -np.power(norm_knn_dists, -12) # q=1.2, m=60 # q=1.5, m=60
                 self.knn_dist_rms.update(knn_dists)
                 knn_dist_min = np.maximum(EPS, self.knn_dist_rms.mean - 3 * np.sqrt(self.knn_dist_rms.var + EPS))
                 
@@ -488,7 +481,7 @@ class Agent:
                 next_reward_values_tensor = self.reward_value(next_states_tensor)
                 reward_values = reward_values_tensor.detach().cpu().numpy()
                 next_reward_values = next_reward_values_tensor.detach().cpu().numpy()
-                reward_gaes, reward_targets = self._getGaesTargets(norm_s_ent, reward_values, dones, fails, next_reward_values, rhos)
+                reward_gaes, reward_targets = self._getGaesTargets(rewards + self.beta_intr*norm_s_ent, reward_values, dones, fails, next_reward_values, rhos)
                 # for cost
                 cost_values_tensor = self.cost_value(states_tensor)
                 next_cost_values_tensor = self.cost_value(next_states_tensor)
