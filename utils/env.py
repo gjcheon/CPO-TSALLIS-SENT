@@ -12,6 +12,8 @@ class GymEnv(gym.Env):
         self.env_name = env_name
         self._env = gym.make(env_name)
         self._env.seed(seed)
+        self._env.reward_box_dist = 0.0
+        self._env.reward_distance = 0.0
         _, self.robot_name, self.task_name = re.findall('[A-Z][a-z]+', env_name)
         self.robot_name = self.robot_name.lower()
         self.task_name = self.task_name.lower()
@@ -53,9 +55,9 @@ class GymEnv(gym.Env):
         return state
 
     def _get_cost(self, h_dist):
-        h_coeff = 10.0
-        cost = 1.0/(1.0 + np.exp((h_dist - self.safety_confidence)*h_coeff))
-        return cost
+        #h_coeff = 10.0
+        #cost = 1.0/(1.0 + np.exp((h_dist - self.safety_confidence)*h_coeff))
+        return 1.0 if h_dist < 0.0 else 0.0
 
     def _get_min_dist(self, hazard_pos_list, pos):
         pos = np.array(pos)
