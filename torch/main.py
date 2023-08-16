@@ -77,7 +77,7 @@ def getParser():
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
     parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
-    parser.add_argument('--cost_d', type=float, default=0.05, help='cost limit value.')
+    parser.add_argument('--cost_d', type=float, default=0.02, help='cost limit value.')
     return parser
 
 def train(args):
@@ -258,7 +258,7 @@ def train(args):
 
 def test(args):
     # define Environment
-    env = Env(args.env_name, 1, args.max_episode_steps)
+    env = Env(args.env_name, args.seed, args.max_episode_steps)
     obs_rms = RunningMeanStd(args.save_dir, env.observation_space.shape[0])
     episodes = int(10)
 
