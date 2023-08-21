@@ -69,7 +69,7 @@ def getParser():
     parser.add_argument('--n_epochs', type=int, default=100, help='# of updates.')
     parser.add_argument('--gae_coeff', type=float, default=0.97, help='GAE coefficient.')
     parser.add_argument('--tsallis_q', type=float, default=1.0, help='Tsallis entropy q value')
-    parser.add_argument('--beta_intr', type=float, default=0.1, help='portion of intrinsic reward')
+    parser.add_argument('--beta_intr', type=float, default=0.03, help='portion of intrinsic reward')
     # trust region
     parser.add_argument('--damping_coeff', type=float, default=0.01, help='damping coefficient.')
     parser.add_argument('--num_conjugate', type=int, default=10, help='# of maximum conjugate step.')
@@ -77,7 +77,7 @@ def getParser():
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
     parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
-    parser.add_argument('--cost_d', type=float, default=0.02, help='cost limit value.')
+    parser.add_argument('--cost_d', type=float, default=0.005, help='cost limit value.')
     return parser
 
 def train(args):
