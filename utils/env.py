@@ -274,12 +274,12 @@ class WalkerEnv(gym.Env):
         self._env.seed(seed)
         self.max_episode_length = max_episode_length
         self.action_repeat = action_repeat
+        self.xpos_before = 0.
 
         self.obs_dim = self._env.observation_space.shape[0]
         self.action_dim = self._env.action_space.shape[0]
         self.observation_space = gym.spaces.box.Box(-np.ones(self.obs_dim), np.ones(self.obs_dim))
         self.action_space = gym.spaces.box.Box(-np.ones(self.action_dim), np.ones(self.action_dim))
-
 
     def seed(self, num_seed):
         self._env.seed(num_seed)
@@ -289,7 +289,7 @@ class WalkerEnv(gym.Env):
         b = 15.0
         height = state[0] # 0.7 < height
         cost = 1.0/(1.0 + np.exp((height - a)*b))
-        return cost
+        return 1.0 if height < 1.5 else 0.0
 
     def reset(self):
         self.t = 0
@@ -306,6 +306,8 @@ class WalkerEnv(gym.Env):
             if done:
                 break
         state = s_t
+        reward = 1. if info['x_position'] - self.xpos_before > 2. else 0.
+        self.xpos_before = info['x_position']
         info['goal_met'] = False
         info['cost'] = self.getCost(state)
         info['num_cv'] = 1 if info['cost'] >=0.5 else 0
