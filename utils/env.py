@@ -289,7 +289,7 @@ class WalkerEnv(gym.Env):
         b = 15.0
         height = state[0] # 0.7 < height
         cost = 1.0/(1.0 + np.exp((height - a)*b))
-        return 1.0 if height < 1.5 else 0.0
+        return 1.0 if height > 1.2 else 0.0
 
     def reset(self):
         self.t = 0
@@ -306,7 +306,7 @@ class WalkerEnv(gym.Env):
             if done:
                 break
         state = s_t
-        reward = 1. if info['x_position'] - self.xpos_before > 2. else 0.
+        reward = 1. if info['x_position'] - self.xpos_before > 0.2 else 0.
         self.xpos_before = info['x_position']
         info['goal_met'] = False
         info['cost'] = self.getCost(state)

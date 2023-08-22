@@ -77,7 +77,7 @@ def getParser():
     parser.add_argument('--max_kl', type=float, default=0.001, help='maximum kl divergence.')
     # for constraint
     parser.add_argument('--cost_alpha', type=float, default=1.0, help='cost alpha of CVaR.')
-    parser.add_argument('--cost_d', type=float, default=0.005, help='cost limit value.')
+    parser.add_argument('--cost_d', type=float, default=0.02, help='cost limit value.')
     return parser
 
 def train(args):
