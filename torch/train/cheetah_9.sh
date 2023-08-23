@@ -1,0 +1,3 @@
+python main.py --name CPO-HalfCheetah-v3-Tsallis-q=1.5 --seed 1 --env_name HalfCheetah-v3-v3 --beta_intr 0.03 --tsallis_q 1.5 --gpu_idx 1 --wandb
+python main.py --name CPO-HalfCheetah-v3-Tsallis-q=2.0 --seed 1 --env_name HalfCheetah-v3-v3 --beta_intr 0.03 --tsallis_q 2.0 --gpu_idx 1 --wandb
+python main.py --name CPO-HalfCheetah-v3-Tsallis-q=3.0 --seed 1 --env_name HalfCheetah-v3-v3 --beta_intr 0.03 --tsallis_q 3.0 --gpu_idx 1 --wandb
